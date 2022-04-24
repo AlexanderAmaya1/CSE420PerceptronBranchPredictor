@@ -1,16 +1,20 @@
-//******************************************
-// Author: Alexander Amaya
-// Email: amamaya2@asu.edu
-// Purpose: CSE 420 Lab 2
-// Description: Creates a tournament branch
+//*******************************************
+// Author: Alexander Amaya, Mason Blumling
+//         Jacob Sumner, Sarah Hope Swaim
+//
+// Purpose: CSE 420 Semester Project
+//
+// Description: Creates a perceptron branch
 // predictor using Intel Pin tools. 
 //******************************************
+
 #include <iostream>
 #include <stdio.h>
 #include <assert.h>
 #include <fstream> 
 #include <cmath>
 #include <vector>
+
 
 #include "pin.H"
 using namespace std;
@@ -168,18 +172,18 @@ struct gshare{
 struct perceptron{
 
  // 8192 rows of  weight registers 
-  vector<INT64> weight[8192];
+  vector<INT64> weight[32768];
 
   // 8192 rows of n bit history registers 
-  vector<INT64> history[8192];
+  vector<INT64> history[32768];
 
-  INT64 y[8192] = {0};
+  INT64 y[32768] = {0};
 
   INT64 threshhold = (int)floor(1.93*256+14);
 
   perceptron(){
 
-    for(int i = 0; i < 8192; i++){
+    for(int i = 0; i < 32768; i++){
 
       for(int j = 0; j < 256; j++){
 
@@ -200,17 +204,17 @@ struct perceptron{
         last_taken = -1;
       }
 
-    if( abs(y[address%8192]) <= threshhold || ((y[address%8192] >= 0) != taken_actually)){
+    if( abs(y[address%32768]) <= threshhold || ((y[address%32768] >= 0) != taken_actually)){
 
         for(int i  = 0; i < 256; i++){
           
-          if(history[address % 8192][i] == last_taken){
+          if(history[address % 32768][i] == last_taken){
 
-            weight[address % 8192][i]++;
+            weight[address % 32768][i]++;
 
           }else{
 
-            weight[address % 8192][i]--;
+            weight[address % 32768][i]--;
 
           }
             
@@ -236,27 +240,27 @@ struct perceptron{
 
 
       //Update History
-      history[address % 8192].push_back(last_taken);
-      history[address % 8192].erase(history[address%8192].begin());
+      history[address % 32768].push_back(last_taken);
+      history[address % 32768].erase(history[address%32768].begin());
       
-      weight[address % 8192].push_back(0);
-      weight[address % 8192].erase(weight[address%8192].begin());
+      weight[address % 32768].push_back(0);
+      weight[address % 32768].erase(weight[address%32768].begin());
 
       //Train
       training(taken_actually, address);
 
-      INT64 running = weight[address%8192][255];
+      INT64 running = weight[address%32768][255];
 
 
 
       for(UINT64 i = 1; i < 256; i++){
 
-        running += (weight[address%8192][i]*history[address%8192][i]);
+        running += (weight[address%32768][i]*history[address%32768][i]);
 
       }
 
 
-      y[address%8192] = running;
+      y[address%32768] = running;
 
 
 
@@ -265,7 +269,7 @@ struct perceptron{
 
   bool get_prediction(UINT64 address){
 
-   if(y[address%8192] >= 0)
+   if(y[address%32768] >= 0)
     return true;
    else
     return false;
@@ -320,7 +324,7 @@ class myBranchPredictor: public BranchPredictor {
 
   }
 
-   tournament predictor;
+  perceptron predictor;
 
   BOOL makePrediction(ADDRINT address){
 
@@ -342,14 +346,15 @@ myBranchPredictor* BP;
 // This knob sets the output file name
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "result.out", "specify the output file name");
 
-void branch_output(ADDRINT address, BOOL takenActually, BOOL takenPredicted ){
+// Outputs the Data Needed to Run the Branch Analysis Python Script
+void branch_output(ADDRINT address, ADDRINT pot, BOOL takenActually, BOOL takenPredicted ){
 
-  outfile << insCount << "," << branchCount << "," <<address << "," << takenActually << "," << takenPredicted << "\n";
+  outfile << insCount << "," << branchCount << "," <<address << "," << pot << ',' <<takenActually << "," << takenPredicted << "\n";
  
 }
 
 
-void handleBranch(ADDRINT ip, BOOL direction)
+void handleBranch(ADDRINT ip, ADDRINT pot, BOOL direction)
 {
 
   BOOL prediction = BP->makePrediction(ip);
@@ -375,7 +380,8 @@ void handleBranch(ADDRINT ip, BOOL direction)
 
   }
 
-  branch_output(ip,direction, prediction);
+  // Uncomment to output the data needed for python branch analysis
+  branch_output(ip,pot,direction, prediction);
 
 }
 
@@ -391,9 +397,14 @@ void instrumentBranch(INS ins, void * v)
   INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)instrCount, IARG_END);
 
   if(INS_IsBranch(ins) && INS_HasFallThrough(ins)) {
+
+    ADDRINT t = INS_DirectControlFlowTargetAddress(ins);
+
     INS_InsertCall(
       ins, IPOINT_TAKEN_BRANCH, (AFUNPTR)handleBranch,
       IARG_INST_PTR,
+      IARG_ADDRINT, 
+      t, 
       IARG_BOOL,
       TRUE,
       IARG_END); 
@@ -401,13 +412,15 @@ void instrumentBranch(INS ins, void * v)
     INS_InsertCall(
       ins, IPOINT_AFTER, (AFUNPTR)handleBranch,
       IARG_INST_PTR,
+      IARG_ADDRINT, 
+      t, 
       IARG_BOOL,
       FALSE,
       IARG_END);
   }
 }
 
-
+// Outputs the Statistics Needed to Do Machine Learning Analysis
 void ml_stats(ofstream& outfile){
 
     double truePositives = (double)takenCorrect;
@@ -437,7 +450,7 @@ void ml_stats(ofstream& outfile){
         roc_analysis = "random";
     }
 
-  outfile << "TP: " << truePositives << "\nFP: " << falsePositives << "\nTN: " << trueNegatives << "\nFN: " << falseNegatives << "\n\nACCURACY: " << accuracy << "\nSensitivity: " << sensitivity << "\nSpecifity: " << specifity << "\nPrecision: " << precision << "\nF1 Score: " << f1_score << "\n\nTrue Positive Rate: " << truePositiveRate << "\nFalse Positive Rate: " << falsePositiveRate << "\n\nROC: " << roc_analysis << "\n";
+  outfile << fixed <<"TP: " << truePositives << "\nFP: " << falsePositives << "\nTN: " << trueNegatives << "\nFN: " << falseNegatives << "\n\nACCURACY: " << accuracy << "\nSensitivity: " << sensitivity << "\nSpecifity: " << specifity << "\nPrecision: " << precision << "\nF1 Score: " << f1_score << "\n\nTrue Positive Rate: " << truePositiveRate << "\nFalse Positive Rate: " << falsePositiveRate << "\n\nROC: " << roc_analysis << "\n";
 
 }
 
@@ -449,14 +462,14 @@ VOID Fini(int, VOID * v)
   double percent = sum_correct/sum * 100;
   
   cout << "\nPercent Accuracy: " << percent <<endl;
-  //cout << "Size of Predictor: " << sizeof(BP->predictor) << " bytes out of 4125 bytes "<<endl;
+  cout << "Total Instructions: " << insCount << endl;
+  cout << "Total Branches: " << branchCount << endl;
+  cout << "Percent Branches: " << ((double)branchCount) / ((double)insCount) * 100 << endl;
 
-
-
-  //ofstream outfile;
-  ///outfile.open(KnobOutputFile.Value().c_str());
- // outfile.setf(ios::showbase);
-  //outfile << "takenCorrect: "<< takenCorrect <<"  takenIncorrect: "<< takenIncorrect <<" notTakenCorrect: "<< notTakenCorrect <<" notTakenIncorrect: "<< notTakenIncorrect <<"\n";
+  // ofstream outfile;
+  // outfile.open(KnobOutputFile.Value().c_str());
+  // outfile.setf(ios::showbase);
+  // outfile << "takenCorrect: "<< takenCorrect <<"  takenIncorrect: "<< takenIncorrect <<" notTakenCorrect: "<< notTakenCorrect <<" notTakenIncorrect: "<< notTakenIncorrect <<"\n";
   
   //ml_stats(outfile);
 
